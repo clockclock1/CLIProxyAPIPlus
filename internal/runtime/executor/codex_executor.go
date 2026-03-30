@@ -28,15 +28,15 @@ import (
 )
 
 const (
-	// codexUserAgent matches the OpenAI Node SDK format (Stainless-generated)
-	codexUserAgent  = "OpenAI/JS 4.73.1"
+	// codexOriginator is the default originator for Codex requests
 	codexOriginator = "openai-node"
 	
-	// Stainless SDK fingerprint constants matching OpenAI Node SDK v4.73.1
-	codexStainlessPackageVersion = "4.73.1"
-	codexStainlessRuntimeVersion = "v22.11.0"
-	codexStainlessOS             = "MacOS"
-	codexStainlessArch           = "arm64"
+	// Default fallback values (used when fingerprint system is unavailable)
+	codexUserAgentFallback  = "OpenAI/JS 4.73.1"
+	codexStainlessPackageVersionFallback = "4.73.1"
+	codexStainlessRuntimeVersionFallback = "v22.11.0"
+	codexStainlessOSFallback             = "MacOS"
+	codexStainlessArchFallback           = "arm64"
 )
 
 var dataTag = []byte("data:")
@@ -659,18 +659,41 @@ func applyCodexHeaders(r *http.Request, auth *cliproxyauth.Auth, token string, s
 	misc.EnsureHeader(r.Header, ginHeaders, "session_id", uuid.NewString())
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Client-Request-Id", "")
 	
-	// User-Agent configuration
+	// Get or create per-account fingerprint for deep simulation
+	fp := getOrCreateFingerprint(auth)
+	if fp != nil {
+		// Log fingerprint summary for debugging (only once per account)
+		logWithRequestID(r.Context()).Debugf("codex executor: using fingerprint [%s] for account", getFingerprintSummary(fp))
+	}
+	
+	// User-Agent configuration with fingerprint
 	cfgUserAgent, _ := codexHeaderDefaults(cfg, auth)
-	ensureHeaderWithConfigPrecedence(r.Header, ginHeaders, "User-Agent", cfgUserAgent, codexUserAgent)
+	userAgent := codexUserAgentFallback
+	if fp != nil {
+		userAgent = fp.UserAgent
+	}
+	ensureHeaderWithConfigPrecedence(r.Header, ginHeaders, "User-Agent", cfgUserAgent, userAgent)
 
-	// Stainless SDK headers - match OpenAI Node SDK v4.73.1 fingerprint
+	// Stainless SDK headers - use per-account randomized fingerprint
 	// These headers are sent by the official OpenAI SDK and are critical for authentication
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Lang", "js")
-	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Package-Version", codexStainlessPackageVersion)
+	
+	packageVersion := codexStainlessPackageVersionFallback
+	runtimeVersion := codexStainlessRuntimeVersionFallback
+	osValue := codexStainlessOSFallback
+	archValue := codexStainlessArchFallback
+	if fp != nil {
+		packageVersion = fp.PackageVersion
+		runtimeVersion = fp.RuntimeVersion
+		osValue = fp.OS
+		archValue = fp.Arch
+	}
+	
+	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Package-Version", packageVersion)
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Runtime", "node")
-	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Runtime-Version", codexStainlessRuntimeVersion)
-	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Arch", codexStainlessArch)
-	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Os", codexStainlessOS)
+	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Runtime-Version", runtimeVersion)
+	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Arch", archValue)
+	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Os", osValue)
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Retry-Count", "0")
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Async", "false")
 
@@ -694,7 +717,13 @@ func applyCodexHeaders(r *http.Request, auth *cliproxyauth.Auth, token string, s
 	
 	// Standard connection headers
 	r.Header.Set("Connection", "keep-alive")
-	misc.EnsureHeader(r.Header, ginHeaders, "Accept-Language", "en-US,en;q=0.9")
+	
+	// Accept-Language with per-account randomization
+	acceptLang := "en-US,en;q=0.9"
+	if fp != nil {
+		acceptLang = fp.AcceptLanguage
+	}
+	misc.EnsureHeader(r.Header, ginHeaders, "Accept-Language", acceptLang)
 
 	// OAuth-specific headers (not for API key auth)
 	isAPIKey := false
