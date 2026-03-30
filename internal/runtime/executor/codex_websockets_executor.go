@@ -833,6 +833,15 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *
 	misc.EnsureHeader(headers, ginHeaders, "session_id", uuid.NewString())
 	ensureHeaderWithConfigPrecedence(headers, ginHeaders, "User-Agent", cfgUserAgent, codexUserAgent)
 
+	// Add Stainless SDK headers to match OpenAI Node SDK fingerprint
+	misc.EnsureHeader(headers, ginHeaders, "X-Stainless-Lang", "js")
+	misc.EnsureHeader(headers, ginHeaders, "X-Stainless-Package-Version", "4.73.1")
+	misc.EnsureHeader(headers, ginHeaders, "X-Stainless-Runtime", "node")
+	misc.EnsureHeader(headers, ginHeaders, "X-Stainless-Runtime-Version", "v22.11.0")
+	misc.EnsureHeader(headers, ginHeaders, "X-Stainless-Arch", "arm64")
+	misc.EnsureHeader(headers, ginHeaders, "X-Stainless-Os", "MacOS")
+	misc.EnsureHeader(headers, ginHeaders, "X-Stainless-Retry-Count", "0")
+
 	isAPIKey := false
 	if auth != nil && auth.Attributes != nil {
 		if v := strings.TrimSpace(auth.Attributes["api_key"]); v != "" {
