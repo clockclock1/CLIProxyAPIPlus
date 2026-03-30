@@ -8,7 +8,8 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  # 关键修复：强制转小写，解决 "repository name must be lowercase"
+  IMAGE_NAME: ${{ toLower(github.repository) }}
 
 jobs:
   docker_amd64:
