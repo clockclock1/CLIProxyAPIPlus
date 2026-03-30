@@ -35,13 +35,6 @@ const (
 	codexResponsesWebsocketBetaHeaderValue = "responses_websockets=2026-02-06"
 	codexResponsesWebsocketIdleTimeout     = 5 * time.Minute
 	codexResponsesWebsocketHandshakeTO     = 30 * time.Second
-	
-	// Stainless SDK fingerprint constants (shared with codex_executor.go)
-	// These match OpenAI Node SDK v4.73.1
-	codexStainlessPackageVersion = "4.73.1"
-	codexStainlessRuntimeVersion = "v22.11.0"
-	codexStainlessOS             = "MacOS"
-	codexStainlessArch           = "arm64"
 )
 
 // CodexWebsocketsExecutor executes Codex Responses requests using a WebSocket transport.
