@@ -836,23 +836,52 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *
 	// Session and request tracking
 	misc.EnsureHeader(headers, ginHeaders, "session_id", uuid.NewString())
 	
-	// User-Agent
-	ensureHeaderWithConfigPrecedence(headers, ginHeaders, "User-Agent", cfgUserAgent, codexUserAgent)
+	// Get or create per-account fingerprint for deep simulation
+	fp := getOrCreateFingerprint(auth)
+	if fp != nil {
+		log.Debugf("codex websockets executor: using fingerprint [%s] for account", getFingerprintSummary(fp))
+	}
+	
+	// User-Agent with fingerprint
+	userAgent := codexUserAgentFallback
+	if fp != nil {
+		userAgent = fp.UserAgent
+	}
+	ensureHeaderWithConfigPrecedence(headers, ginHeaders, "User-Agent", cfgUserAgent, userAgent)
 
-	// Stainless SDK headers - critical for OpenAI Node SDK fingerprint matching
-	// These headers identify the client as the official OpenAI Node SDK v4.73.1
+	// Stainless SDK headers - use per-account randomized fingerprint
+	// These headers identify the client as the official OpenAI Node SDK
 	misc.EnsureHeader(headers, ginHeaders, "X-Stainless-Lang", "js")
-	misc.EnsureHeader(headers, ginHeaders, "X-Stainless-Package-Version", codexStainlessPackageVersion)
+	
+	packageVersion := codexStainlessPackageVersionFallback
+	runtimeVersion := codexStainlessRuntimeVersionFallback
+	osValue := codexStainlessOSFallback
+	archValue := codexStainlessArchFallback
+	if fp != nil {
+		packageVersion = fp.PackageVersion
+		runtimeVersion = fp.RuntimeVersion
+		osValue = fp.OS
+		archValue = fp.Arch
+	}
+	
+	misc.EnsureHeader(headers, ginHeaders, "X-Stainless-Package-Version", packageVersion)
 	misc.EnsureHeader(headers, ginHeaders, "X-Stainless-Runtime", "node")
-	misc.EnsureHeader(headers, ginHeaders, "X-Stainless-Runtime-Version", codexStainlessRuntimeVersion)
-	misc.EnsureHeader(headers, ginHeaders, "X-Stainless-Arch", codexStainlessArch)
-	misc.EnsureHeader(headers, ginHeaders, "X-Stainless-Os", codexStainlessOS)
+	misc.EnsureHeader(headers, ginHeaders, "X-Stainless-Runtime-Version", runtimeVersion)
+	misc.EnsureHeader(headers, ginHeaders, "X-Stainless-Arch", archValue)
+	misc.EnsureHeader(headers, ginHeaders, "X-Stainless-Os", osValue)
 	misc.EnsureHeader(headers, ginHeaders, "X-Stainless-Retry-Count", "0")
 	misc.EnsureHeader(headers, ginHeaders, "X-Stainless-Async", "false")
 	
 	// OpenAI organization/project headers
 	misc.EnsureHeader(headers, ginHeaders, "OpenAI-Organization", "")
 	misc.EnsureHeader(headers, ginHeaders, "OpenAI-Project", "")
+	
+	// Accept-Language with per-account randomization
+	acceptLang := "en-US,en;q=0.9"
+	if fp != nil {
+		acceptLang = fp.AcceptLanguage
+	}
+	misc.EnsureHeader(headers, ginHeaders, "Accept-Language", acceptLang)
 
 	// OAuth-specific headers (not for API key authentication)
 	isAPIKey := false
