@@ -35,6 +35,13 @@ const (
 	codexResponsesWebsocketBetaHeaderValue = "responses_websockets=2026-02-06"
 	codexResponsesWebsocketIdleTimeout     = 5 * time.Minute
 	codexResponsesWebsocketHandshakeTO     = 30 * time.Second
+	
+	// Stainless SDK fingerprint constants (shared with codex_executor.go)
+	// These match OpenAI Node SDK v4.73.1
+	codexStainlessPackageVersion = "4.73.1"
+	codexStainlessRuntimeVersion = "v22.11.0"
+	codexStainlessOS             = "MacOS"
+	codexStainlessArch           = "arm64"
 )
 
 // CodexWebsocketsExecutor executes Codex Responses requests using a WebSocket transport.
@@ -609,7 +616,7 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 }
 
 func (e *CodexWebsocketsExecutor) dialCodexWebsocket(ctx context.Context, auth *cliproxyauth.Auth, wsURL string, headers http.Header) (*websocket.Conn, *http.Response, error) {
-	dialer := newProxyAwareWebsocketDialer(e.cfg, auth)
+	dialer := newCodexWebsocketDialer(e.cfg, auth, wsURL)
 	dialer.HandshakeTimeout = codexResponsesWebsocketHandshakeTO
 	dialer.EnableCompression = true
 	if ctx == nil {
@@ -814,6 +821,7 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *
 		ginHeaders = ginCtx.Request.Header
 	}
 
+	// Codex-specific headers
 	cfgUserAgent, cfgBetaFeatures := codexHeaderDefaults(cfg, auth)
 	ensureHeaderWithPriority(headers, ginHeaders, "x-codex-beta-features", cfgBetaFeatures, "")
 	misc.EnsureHeader(headers, ginHeaders, "x-codex-turn-state", "")
@@ -822,6 +830,7 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *
 	misc.EnsureHeader(headers, ginHeaders, "x-responsesapi-include-timing-metrics", "")
 	misc.EnsureHeader(headers, ginHeaders, "Version", "")
 
+	// OpenAI Beta header for WebSocket support
 	betaHeader := strings.TrimSpace(headers.Get("OpenAI-Beta"))
 	if betaHeader == "" && ginHeaders != nil {
 		betaHeader = strings.TrimSpace(ginHeaders.Get("OpenAI-Beta"))
@@ -830,29 +839,42 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *
 		betaHeader = codexResponsesWebsocketBetaHeaderValue
 	}
 	headers.Set("OpenAI-Beta", betaHeader)
+	
+	// Session and request tracking
 	misc.EnsureHeader(headers, ginHeaders, "session_id", uuid.NewString())
+	
+	// User-Agent
 	ensureHeaderWithConfigPrecedence(headers, ginHeaders, "User-Agent", cfgUserAgent, codexUserAgent)
 
-	// Add Stainless SDK headers to match OpenAI Node SDK fingerprint
+	// Stainless SDK headers - critical for OpenAI Node SDK fingerprint matching
+	// These headers identify the client as the official OpenAI Node SDK v4.73.1
 	misc.EnsureHeader(headers, ginHeaders, "X-Stainless-Lang", "js")
-	misc.EnsureHeader(headers, ginHeaders, "X-Stainless-Package-Version", "4.73.1")
+	misc.EnsureHeader(headers, ginHeaders, "X-Stainless-Package-Version", codexStainlessPackageVersion)
 	misc.EnsureHeader(headers, ginHeaders, "X-Stainless-Runtime", "node")
-	misc.EnsureHeader(headers, ginHeaders, "X-Stainless-Runtime-Version", "v22.11.0")
-	misc.EnsureHeader(headers, ginHeaders, "X-Stainless-Arch", "arm64")
-	misc.EnsureHeader(headers, ginHeaders, "X-Stainless-Os", "MacOS")
+	misc.EnsureHeader(headers, ginHeaders, "X-Stainless-Runtime-Version", codexStainlessRuntimeVersion)
+	misc.EnsureHeader(headers, ginHeaders, "X-Stainless-Arch", codexStainlessArch)
+	misc.EnsureHeader(headers, ginHeaders, "X-Stainless-Os", codexStainlessOS)
 	misc.EnsureHeader(headers, ginHeaders, "X-Stainless-Retry-Count", "0")
+	misc.EnsureHeader(headers, ginHeaders, "X-Stainless-Async", "false")
+	
+	// OpenAI organization/project headers
+	misc.EnsureHeader(headers, ginHeaders, "OpenAI-Organization", "")
+	misc.EnsureHeader(headers, ginHeaders, "OpenAI-Project", "")
 
+	// OAuth-specific headers (not for API key authentication)
 	isAPIKey := false
 	if auth != nil && auth.Attributes != nil {
 		if v := strings.TrimSpace(auth.Attributes["api_key"]); v != "" {
 			isAPIKey = true
 		}
 	}
+	
 	if originator := strings.TrimSpace(ginHeaders.Get("Originator")); originator != "" {
 		headers.Set("Originator", originator)
 	} else if !isAPIKey {
 		headers.Set("Originator", codexOriginator)
 	}
+	
 	if !isAPIKey {
 		if auth != nil && auth.Metadata != nil {
 			if accountID, ok := auth.Metadata["account_id"].(string); ok {
@@ -861,8 +883,14 @@ func applyCodexWebsocketHeaders(ctx context.Context, headers http.Header, auth *
 				}
 			}
 		}
+		// Add device ID header for OAuth authentication
+		// This mimics official ChatGPT client behavior
+		if deviceID := resolveCodexDeviceID(auth); deviceID != "" {
+			misc.EnsureHeader(headers, ginHeaders, "OAI-Device-Id", deviceID)
+		}
 	}
 
+	// Apply custom headers from auth attributes (allows user override)
 	var attrs map[string]string
 	if auth != nil {
 		attrs = auth.Attributes
