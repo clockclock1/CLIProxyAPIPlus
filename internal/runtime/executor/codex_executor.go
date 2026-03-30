@@ -80,7 +80,9 @@ func (e *CodexExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.Auth
 	if err := e.PrepareRequest(httpReq, auth); err != nil {
 		return nil, err
 	}
-	httpClient := newCodexHTTPClient(e.cfg, auth, shouldUseUtlsForCodex(baseURL))
+	// Determine if we should use utls based on the request URL
+	useUtls := shouldUseUtlsForCodex(req.URL.String())
+	httpClient := newCodexHTTPClient(e.cfg, auth, useUtls)
 	return httpClient.Do(httpReq)
 }
 
