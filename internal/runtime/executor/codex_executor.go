@@ -28,8 +28,8 @@ import (
 )
 
 const (
-	codexUserAgent  = "codex_cli_rs/0.116.0 (Mac OS 26.0.1; arm64) Apple_Terminal/464"
-	codexOriginator = "codex_cli_rs"
+	codexUserAgent  = "OpenAI/JS 4.73.1"
+	codexOriginator = "openai-node"
 )
 
 var dataTag = []byte("data:")
@@ -652,6 +652,15 @@ func applyCodexHeaders(r *http.Request, auth *cliproxyauth.Auth, token string, s
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Client-Request-Id", "")
 	cfgUserAgent, _ := codexHeaderDefaults(cfg, auth)
 	ensureHeaderWithConfigPrecedence(r.Header, ginHeaders, "User-Agent", cfgUserAgent, codexUserAgent)
+
+	// Add Stainless SDK headers to match OpenAI Node SDK fingerprint
+	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Lang", "js")
+	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Package-Version", "4.73.1")
+	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Runtime", "node")
+	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Runtime-Version", "v22.11.0")
+	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Arch", "arm64")
+	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Os", "MacOS")
+	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Retry-Count", "0")
 
 	if stream {
 		r.Header.Set("Accept", "text/event-stream")
