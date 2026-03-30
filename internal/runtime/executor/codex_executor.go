@@ -28,8 +28,15 @@ import (
 )
 
 const (
+	// codexUserAgent matches the OpenAI Node SDK format (Stainless-generated)
 	codexUserAgent  = "OpenAI/JS 4.73.1"
 	codexOriginator = "openai-node"
+	
+	// Stainless SDK fingerprint constants matching OpenAI Node SDK v4.73.1
+	codexStainlessPackageVersion = "4.73.1"
+	codexStainlessRuntimeVersion = "v22.11.0"
+	codexStainlessOS             = "MacOS"
+	codexStainlessArch           = "arm64"
 )
 
 var dataTag = []byte("data:")
@@ -73,7 +80,7 @@ func (e *CodexExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.Auth
 	if err := e.PrepareRequest(httpReq, auth); err != nil {
 		return nil, err
 	}
-	httpClient := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
+	httpClient := newCodexHTTPClient(e.cfg, auth, shouldUseUtlsForCodex(baseURL))
 	return httpClient.Do(httpReq)
 }
 
@@ -141,7 +148,7 @@ func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, re
 		AuthType:  authType,
 		AuthValue: authValue,
 	})
-	httpClient := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
+	httpClient := newCodexHTTPClient(e.cfg, auth, shouldUseUtlsForCodex(baseURL))
 	httpResp, err := httpClient.Do(httpReq)
 	if err != nil {
 		recordAPIResponseError(ctx, e.cfg, err)
@@ -246,7 +253,7 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 		AuthType:  authType,
 		AuthValue: authValue,
 	})
-	httpClient := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
+	httpClient := newCodexHTTPClient(e.cfg, auth, shouldUseUtlsForCodex(baseURL))
 	httpResp, err := httpClient.Do(httpReq)
 	if err != nil {
 		recordAPIResponseError(ctx, e.cfg, err)
@@ -343,7 +350,7 @@ func (e *CodexExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.Au
 		AuthValue: authValue,
 	})
 
-	httpClient := newProxyAwareHTTPClient(ctx, e.cfg, auth, 0)
+	httpClient := newCodexHTTPClient(e.cfg, auth, shouldUseUtlsForCodex(baseURL))
 	httpResp, err := httpClient.Do(httpReq)
 	if err != nil {
 		recordAPIResponseError(ctx, e.cfg, err)
@@ -646,52 +653,88 @@ func applyCodexHeaders(r *http.Request, auth *cliproxyauth.Auth, token string, s
 		ginHeaders = ginCtx.Request.Header
 	}
 
-	misc.EnsureHeader(r.Header, ginHeaders, "Version", "")
+	// Core request headers
 	misc.EnsureHeader(r.Header, ginHeaders, "session_id", uuid.NewString())
-	misc.EnsureHeader(r.Header, ginHeaders, "X-Codex-Turn-Metadata", "")
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Client-Request-Id", "")
+	
+	// User-Agent configuration
 	cfgUserAgent, _ := codexHeaderDefaults(cfg, auth)
 	ensureHeaderWithConfigPrecedence(r.Header, ginHeaders, "User-Agent", cfgUserAgent, codexUserAgent)
 
-	// Add Stainless SDK headers to match OpenAI Node SDK fingerprint
+	// Stainless SDK headers - match OpenAI Node SDK v4.73.1 fingerprint
+	// These headers are sent by the official OpenAI SDK and are critical for authentication
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Lang", "js")
-	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Package-Version", "4.73.1")
+	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Package-Version", codexStainlessPackageVersion)
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Runtime", "node")
-	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Runtime-Version", "v22.11.0")
-	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Arch", "arm64")
-	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Os", "MacOS")
+	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Runtime-Version", codexStainlessRuntimeVersion)
+	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Arch", codexStainlessArch)
+	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Os", codexStainlessOS)
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Retry-Count", "0")
+	misc.EnsureHeader(r.Header, ginHeaders, "X-Stainless-Async", "false")
 
+	// OpenAI-specific headers
+	misc.EnsureHeader(r.Header, ginHeaders, "OpenAI-Organization", "")
+	misc.EnsureHeader(r.Header, ginHeaders, "OpenAI-Project", "")
+	
+	// Codex-specific metadata headers
+	misc.EnsureHeader(r.Header, ginHeaders, "X-Codex-Turn-Metadata", "")
+	misc.EnsureHeader(r.Header, ginHeaders, "Version", "")
+
+	// Accept headers based on stream mode
 	if stream {
 		r.Header.Set("Accept", "text/event-stream")
+		// For SSE streams, use identity encoding to avoid compression issues
+		r.Header.Set("Accept-Encoding", "identity")
 	} else {
 		r.Header.Set("Accept", "application/json")
+		r.Header.Set("Accept-Encoding", "gzip, deflate, br")
 	}
-	r.Header.Set("Connection", "Keep-Alive")
+	
+	// Standard connection headers
+	r.Header.Set("Connection", "keep-alive")
+	misc.EnsureHeader(r.Header, ginHeaders, "Accept-Language", "en-US,en;q=0.9")
 
+	// OAuth-specific headers (not for API key auth)
 	isAPIKey := false
 	if auth != nil && auth.Attributes != nil {
 		if v := strings.TrimSpace(auth.Attributes["api_key"]); v != "" {
 			isAPIKey = true
 		}
 	}
+	
 	if originator := strings.TrimSpace(ginHeaders.Get("Originator")); originator != "" {
 		r.Header.Set("Originator", originator)
 	} else if !isAPIKey {
 		r.Header.Set("Originator", codexOriginator)
 	}
+	
 	if !isAPIKey {
 		if auth != nil && auth.Metadata != nil {
 			if accountID, ok := auth.Metadata["account_id"].(string); ok {
-				r.Header.Set("Chatgpt-Account-Id", accountID)
+				if trimmed := strings.TrimSpace(accountID); trimmed != "" {
+					r.Header.Set("Chatgpt-Account-Id", trimmed)
+				}
 			}
 		}
+		// Add device ID header for OAuth authentication
+		// This mimics official ChatGPT client behavior
+		if deviceID := resolveCodexDeviceID(auth); deviceID != "" {
+			misc.EnsureHeader(r.Header, ginHeaders, "OAI-Device-Id", deviceID)
+		}
 	}
+	
+	// Apply custom headers from auth attributes (allows user override)
 	var attrs map[string]string
 	if auth != nil {
 		attrs = auth.Attributes
 	}
 	util.ApplyCustomHeadersFromAttrs(r, attrs)
+	
+	// Re-enforce Accept-Encoding for streams after custom headers
+	// Compressed SSE breaks the line scanner
+	if stream {
+		r.Header.Set("Accept-Encoding", "identity")
+	}
 }
 
 func newCodexStatusErr(statusCode int, body []byte) statusErr {
